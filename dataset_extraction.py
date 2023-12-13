@@ -1,8 +1,10 @@
 import json
+import os
 from collections import namedtuple, defaultdict
 from functools import partial
 from itertools import zip_longest
 from datetime import datetime, timedelta
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -19,10 +21,13 @@ bom_aci_obj = namedtuple('BOM_ACI', ('time', 'value'))
 kepce_aci_obj = namedtuple('KEPCE_ACI', ('time', 'value'))
 valve_obj = namedtuple('VALVE', ('time', 'x_axis', 'y_axis'))
 lamba = namedtuple('LAMBA', ('time', 'value'))
+pedal_volt_obj = namedtuple('VOLT', ('time', 'value'))
+km_sa_obj = namedtuple('KM_SA', ('time', 'value'))
+fren_obj = namedtuple('FREN', ('time', 'value'))
+fuel_level_obj = namedtuple('FUEL', ('time', 'value'))
 
 two_byte = lambda x, y: int(''.join(x), 16) / y
-one_byte = lambda x: int(''.join(x), 8)
-
+one_byte = lambda x: int(''.join(x), 16)
 
 all_types = {'129', 'CF00300x', '1B190D0Dx', '382', '160', '18F00B38x', '207', '18FEEE00x', 
              '152', '171', '18FEE400x', '158', '18FEF803x', '18FDCD4Ex', 'ErrorFrame', '1EF', 
@@ -46,11 +51,15 @@ significant_types = {'1E5': 'kepce_aci',
                      '10D': 'joystick',
                      '152': 'vites',
                      '18FF1E03x': 'hiz',
-                     '153': 'lambda'}
+                     '153': 'lamba',
+                     'CF00300x' : 'pedal_volt',
+                     '18FF1E03x' : 'km_sa',
+                     '151' : 'fuel_level'}
 
 
 def read_all_data_and_write():
-    with open('dataset/canbus/26.102023-10-27_14-12-58.asc', 'r') as fh:
+    path = os.path.join('dataset', 'canbus', '26.102023-10-27_14-12-58.asc')
+    with open(path, 'r') as fh:
         data = fh.read().splitlines()
     
     all_data = defaultdict(list)
@@ -61,7 +70,8 @@ def read_all_data_and_write():
             all_data[line[2]].append(line)
         
     for key, value in all_data.items():
-        path = f'dataset/canbus/{key}.txt'
+        file_name = f'{key}.txt'
+        path = os.path.join('dataset' , 'canbus' , file_name)
         with open(path, 'w') as fh:
             data = '\n'.join([' '.join(s) for s in value])
             fh.write(data)   
@@ -84,41 +94,81 @@ def read_canbus(path, start_indice, end_indice, decoder=None, data_object=None):
             time = int(1000 * float(fields[0]))
             data.append(data_object(time=time, value=value))
         except:
+            traceback.print_exc()
             broken_lines.append(line)
             continue
     return data, broken_lines
 
 def read_rpm():
-    path = 'dataset/canbus/CF00400x.txt'
+    path = os.path.join('dataset', 'canbus', 'CF00400x.txt')
     decoder = partial(two_byte, y=8)
     rpm, broken_lines = read_canbus(path, 10, 8, decoder=decoder, data_object=rpm_obj)
     return rpm, broken_lines
 
+def read_fuel():
+    path = os.path.join('dataset', 'canbus', '151.txt')
+    decoder = partial(two_byte, y=1)
+    fuel_level, broken_lines = read_canbus(path, 9, 8, decoder=decoder, data_object=fuel_level_obj)
+    return fuel_level, broken_lines
+
+def read_km_sa():
+    path = os.path.join('dataset', 'canbus', '18FF1E03x.txt')
+    #two_byte = lambda x, y: int(''.join(x), 16) / y
+    #decoder = partial(two_byte, y=384.06145)
+    def decoder(x):
+        result = two_byte(x, 8)
+        km_sa_value = (result*2*3.14*0.650*60)/(1000*11.76)
+        return km_sa_value
+    km_sa, broken_lines = read_canbus(path, 9, 7,decoder=decoder, data_object=km_sa_obj)
+    #(2*PI*r_dyn*output_speed_rpm x 60)/(1000 x i_axle) -- Hız (km/sa ) -> ID : 18FF1E03 Byte : 3 - 4
+    return km_sa, broken_lines
+
+def read_pedal_volt():
+    path = os.path.join('dataset', 'canbus', 'CF00300x.txt')
+    #Volt = (int(Byte2)*3,2 )/255 + 1,1 -- Pedal Voltaj -> ID : CF00300  Byte : 2
+    def decoder(x):
+        result = one_byte(x)
+        volt = (result*3.2)/255 + 1.1
+        return volt
+    pedal_volt, broken_lines = read_canbus(path, 8, 7, decoder=decoder, data_object=pedal_volt_obj)
+    return pedal_volt, broken_lines
+
 def read_vites():
-    path = 'dataset/canbus/152.txt'
+    path = os.path.join('dataset', 'canbus', '152.txt')
     vites, broken_lines = read_canbus(path, 7, 6, decoder=one_byte, data_object=vites_obj)
     return vites, broken_lines
 
+def read_fren():
+    path = os.path.join('dataset', 'canbus', '152.txt')
+    #Fren -> ID : 152 Byte : 7 __ Bit : 4 On/Off 
+    def decoder(x):
+        result = one_byte(x)
+        fren = result & 16
+        # return 1 if fren else 0
+        return fren>>4
+    fren, broken_lines = read_canbus(path, 13, 12, decoder=decoder, data_object=fren_obj)
+    return fren, broken_lines
+
 def read_bom_aci():
-    path = 'dataset/canbus/1E7.txt'
+    path = os.path.join('dataset', 'canbus', '1E7.txt')
     decoder = partial(two_byte, y=10)
     bom_aci, broken_lines = read_canbus(path, 7, 5, decoder=decoder, data_object=bom_aci_obj)
     return bom_aci, broken_lines
 
 def read_kepce_aci():
-    path = 'dataset/canbus/1E5.txt'
+    path = os.path.join('dataset', 'canbus', '1E5.txt')
     decoder = partial(two_byte, y=10)
     kepce_aci, broken_lines = read_canbus(path, 7, 5, decoder=decoder, data_object=kepce_aci_obj)
     return kepce_aci, broken_lines
 
 def read_lamp():
-    path = 'dataset/canbus/153.txt'
+    path = os.path.join('dataset', 'canbus', '153.txt')
     decoder = one_byte
     kepce_aci, broken_lines = read_canbus(path, 6, 5, decoder=decoder, data_object=lamba)
     return kepce_aci, broken_lines
 
 def read_joystick():
-    path = 'dataset/canbus/10D.txt'
+    path = os.path.join('dataset', 'canbus', '10D.txt')
     with open(path, 'r') as fh:
         lines = fh.read().split('\n')
     data = []
@@ -146,7 +196,7 @@ def register_row(df, data_obj, field, column):
                 print("hey")
 
 def read_bom_kepce(canbus_date):
-    path = '26.10.23/1412_261023_1412.txt'
+    path = os.path.join('dataset', 'datalogger', '1412_261023_1412.txt')
     with open(path, 'r') as fh:
         text = fh.read()
 
@@ -168,7 +218,8 @@ def read_bom_kepce(canbus_date):
     return kepce_basinc_obj_list, bom_basinc_obj_list
 
 def get_datetime_for_canbus():
-    date = 'dataset/canbus/26.102023-10-27_14-12-58.asc'.split('_')[1].split('.')[0]
+    path = os.path.join('dataset', 'canbus', '26.102023-10-27_14-12-58.asc')
+    date = path.split('_')[1].split('.')[0]
     return datetime.strptime(date.replace('-', ':'), '%H:%M:%S')
 
 def create_data_frame():
@@ -176,24 +227,32 @@ def create_data_frame():
     canbus_date = get_datetime_for_canbus()
     full_kepce_basinc, full_bom_basinc = read_bom_kepce(canbus_date)
     full_rpm, _ = read_rpm()
+    full_km_sa, _ = read_km_sa()
+    full_pedal_volt, _ = read_pedal_volt()
+    full_fren, _ = read_fren()
     full_vites, _ = read_vites()
     full_bom_aci, _ = read_bom_aci()
     full_kepce_aci, _ = read_kepce_aci()
     full_valve, _ = read_joystick()
     full_lamba, _ = read_lamp()
-    ls = list(map(lambda x: x[-1].time // 20, [full_kepce_aci, full_bom_aci, full_valve, full_vites, full_rpm]))
+    full_fuel_level, _ = read_fuel()
+    ls = list(map(lambda x: x[-1].time // 20, [full_kepce_aci, full_bom_aci, full_valve, full_vites, full_rpm, full_km_sa, full_pedal_volt, full_fren, full_fuel_level]))
     print(ls)
     length = max(ls)
-    df = pd.DataFrame(np.nan, index=range(length+1), columns=['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites', 'valve_x', 'valve_y', 'rpm'])
-    for lamba, kepce_basinc, bom_basinc, kepce_aci, bom_aci, vites, valve, rpm in zip_longest(full_lamba, full_kepce_basinc, full_bom_basinc, full_kepce_aci, full_bom_aci, full_vites, full_valve, full_rpm):
+    df = pd.DataFrame(np.nan, index=range(length+1), columns=['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites', 'fren', 'valve_x', 'valve_y', 'rpm','km_sa', 'pedal_volt', 'fuel_level'])
+    for lamba, kepce_basinc, bom_basinc, kepce_aci, bom_aci, vites,fren, valve, rpm , km_sa, pedal_volt, fuel_level in zip_longest(full_lamba, full_kepce_basinc, full_bom_basinc, full_kepce_aci, full_bom_aci, full_vites, full_fren, full_valve, full_rpm, full_km_sa, full_pedal_volt, full_fuel_level):
         # add canbus data into dataframe
         register_row(df, lamba, 'value', 'lamba')
         register_row(df, kepce_aci, 'value', 'kepce_aci')
         register_row(df, bom_aci, 'value', 'bom_aci')
         register_row(df, vites, 'value', 'vites')
+        register_row(df, fren, 'value', 'fren')
         register_row(df, rpm, 'value', 'rpm')
+        register_row(df, km_sa, 'value', 'km_sa')
+        register_row(df, pedal_volt, 'value', 'pedal_volt')
         register_row(df, valve, 'x_axis', 'valve_x')
         register_row(df, valve, 'y_axis', 'valve_y')
+        register_row(df, fuel_level, 'value', 'fuel_level' )
         # add datalogger data into dataframe
         register_row(df, kepce_basinc, 'value', 'kepce_basinc')
         register_row(df, bom_basinc, 'value', 'bom_basinc')
@@ -201,7 +260,7 @@ def create_data_frame():
     # Fill rows with NaN
     df = df.fillna(method='ffill',axis=0)
     # sample to 100ms from 20ms
-    df = df.groupby(np.arange(len(df))//5)[['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites', 'valve_x', 'valve_y', 'rpm']].median()
+    df = df.groupby(np.arange(len(df))//5)[['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites','fren', 'valve_x', 'valve_y', 'rpm', 'km_sa', 'pedal_volt', 'fuel_level']].median()
     
     # TODO remove rows with NaN
 
@@ -225,4 +284,8 @@ def main():
     return segments
 
 if __name__ == "__main__":
+    step = 0
+    # step-1
+    if step == 0:
+        read_all_data_and_write()
     df = main()

@@ -277,11 +277,27 @@ def create_segments(df):
     segments = [pd.DataFrame(segment) for segment in segments]
     return segments
 
+def AmazingModel(*arg):
+    pass
+
+def get_x_y(segment: pd.DataFrame):
+    # create input to the model
+    x = [[s.kepce_basinc, s.bom_basinc, s.kepce_aci, s.bom_aci] for s in segment.iterrows()]
+    X = np.array(x).T
+
+    # create output of the inputs created above
+    y = [[s.vites, s.valve_x, s.valve_y, s.pedal_volt] for _,s in segment.iterrows()]
+    Y = np.array(y[1:]).T
+    return X, Y
 
 def main():
     df = create_data_frame()
     segments = create_segments(df)
-    return segments
+    print(f'total numbr of segments is: {len(segments)}')
+    filling_segments = [s for s in segments[2:-1] if s.iloc[0].lamba == 2]
+    print(f'total numbr of filling segments is: {len(segments)}')
+
+    return filling_segments
 
 if __name__ == "__main__":
     step = 0

@@ -290,7 +290,7 @@ def get_x_y(segment: pd.DataFrame):
     Y = np.array(y[1:]).T
     return X, Y
 
-def main():
+def get_training_data():
     df = create_data_frame()
     segments = create_segments(df)
     print(f'total numbr of segments is: {len(segments)}')
@@ -300,8 +300,8 @@ def main():
     return filling_segments
 
 if __name__ == "__main__":
-    step = 0
+    step = 1
     # step-1
     if step == 0:
         read_all_data_and_write()
-    df = main()
+    df = get_training_data()

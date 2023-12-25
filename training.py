@@ -83,6 +83,5 @@ if __name__ == "__main__":
     #     x, y = get_x_y(segment)
     #     data_pairs.append((x,y))
     
-def train():
-    segments = main()
+    train(batch_size=24, epoch_number=40)
     

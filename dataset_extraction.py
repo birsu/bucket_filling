@@ -5,6 +5,7 @@ from functools import partial
 from itertools import zip_longest
 from datetime import datetime, timedelta
 import traceback
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,7 @@ rpm_obj = namedtuple('RPM', ('time', 'value'))
 vites_obj = namedtuple('VITES', ('time', 'value'))
 bom_aci_obj = namedtuple('BOM_ACI', ('time', 'value'))
 kepce_aci_obj = namedtuple('KEPCE_ACI', ('time', 'value'))
-valve_obj = namedtuple('VALVE', ('time', 'x_axis', 'y_axis'))
+valve_obj = namedtuple('VALVE', ('time', 'x_axis', 'y_axis', 'kepce_acma', 'kepce_kapama', 'bom_kald', 'bom_ind'))
 lamba = namedtuple('LAMBA', ('time', 'value'))
 pedal_volt_obj = namedtuple('VOLT', ('time', 'value'))
 km_sa_obj = namedtuple('KM_SA', ('time', 'value'))
@@ -151,13 +152,21 @@ def read_fren():
 
 def read_bom_aci():
     path = os.path.join('dataset', 'canbus', '1E7.txt')
-    decoder = partial(two_byte, y=10)
+    #decoder = partial(two_byte, y=10)
+    def decoder(x):
+        result = two_byte(x, 10)
+        aci_value = 80 - result
+        return aci_value
     bom_aci, broken_lines = read_canbus(path, 7, 5, decoder=decoder, data_object=bom_aci_obj)
     return bom_aci, broken_lines
 
 def read_kepce_aci():
     path = os.path.join('dataset', 'canbus', '1E5.txt')
-    decoder = partial(two_byte, y=10)
+    #decoder = partial(two_byte, y=10)
+    def decoder(x):
+        result = two_byte(x, 10)
+        aci_value = 50 - result
+        return aci_value
     kepce_aci, broken_lines = read_canbus(path, 7, 5, decoder=decoder, data_object=kepce_aci_obj)
     return kepce_aci, broken_lines
 
@@ -177,9 +186,17 @@ def read_joystick():
         try:
             fields = line.split()
             x_axis = int(fields[6], 16)
+            if x_axis <= 127:
+                kepce_acma = x_axis*(100/127)
+            elif x_axis > 127:
+                kepce_kapama = 100 - (100/127)*(x_axis & 0x7f)
             y_axis = int(fields[7], 16)
+            if y_axis <= 127:
+                bom_ind = 100 - y_axis*(100/127)
+            elif y_axis > 127:
+                bom_kald = 100 - (100/127) * (y_axis & 0x7f)
             time = int(1000 * float(fields[0]))
-            data.append(valve_obj(time=time, x_axis=x_axis, y_axis=y_axis))
+            data.append(valve_obj(time=time, x_axis=x_axis, y_axis=y_axis, kepce_acma=kepce_acma, kepce_kapama=kepce_kapama, bom_ind=bom_ind, bom_kald=bom_kald))
         except:
             broken_lines.append(line)
             continue
@@ -239,7 +256,7 @@ def create_data_frame():
     ls = list(map(lambda x: x[-1].time // 20, [full_kepce_aci, full_bom_aci, full_valve, full_vites, full_rpm, full_km_sa, full_pedal_volt, full_fren, full_fuel_level]))
     print(ls)
     length = max(ls)
-    df = pd.DataFrame(np.nan, index=range(length+1), columns=['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites', 'fren', 'valve_x', 'valve_y', 'rpm','km_sa', 'pedal_volt', 'fuel_level'])
+    df = pd.DataFrame(np.nan, index=range(length+1), columns=['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites', 'fren', 'valve_x', 'valve_y','kepce_acma', 'kepce_kapama','bom_ind', 'bom_kald', 'rpm','km_sa', 'pedal_volt', 'fuel_level'])
     for lamba, kepce_basinc, bom_basinc, kepce_aci, bom_aci, vites,fren, valve, rpm , km_sa, pedal_volt, fuel_level in zip_longest(full_lamba, full_kepce_basinc, full_bom_basinc, full_kepce_aci, full_bom_aci, full_vites, full_fren, full_valve, full_rpm, full_km_sa, full_pedal_volt, full_fuel_level):
         # add canbus data into dataframe
         register_row(df, lamba, 'value', 'lamba')
@@ -252,6 +269,10 @@ def create_data_frame():
         register_row(df, pedal_volt, 'value', 'pedal_volt')
         register_row(df, valve, 'x_axis', 'valve_x')
         register_row(df, valve, 'y_axis', 'valve_y')
+        register_row(df, valve, 'kepce_acma', 'kepce_acma')
+        register_row(df, valve, 'kepce_kapama', 'kepce_kapama')
+        register_row(df, valve, 'bom_ind', 'bom_ind')
+        register_row(df, valve, 'bom_kald', 'bom_kald')
         register_row(df, fuel_level, 'value', 'fuel_level' )
         # add datalogger data into dataframe
         register_row(df, kepce_basinc, 'value', 'kepce_basinc')
@@ -260,7 +281,7 @@ def create_data_frame():
     # Fill rows with NaN
     df = df.fillna(method='ffill',axis=0)
     # sample to 100ms from 20ms
-    df = df.groupby(np.arange(len(df))//5)[['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites','fren', 'valve_x', 'valve_y', 'rpm', 'km_sa', 'pedal_volt', 'fuel_level']].median()
+    df = df.groupby(np.arange(len(df))//5)[['lamba', 'kepce_basinc','bom_basinc', 'kepce_aci', 'bom_aci', 'vites','fren', 'valve_x', 'valve_y','kepce_acma', 'kepce_kapama', 'bom_ind', 'bom_kald', 'rpm', 'km_sa', 'pedal_volt', 'fuel_level']].median()
     
     # TODO remove rows with NaN
 
@@ -284,10 +305,15 @@ def get_x_y(segment: pd.DataFrame):
     # create input to the model
     x = [[s.kepce_basinc, s.bom_basinc, s.kepce_aci, s.bom_aci] for s in segment.iterrows()]
     X = np.array(x).T
-
+    mode=1
     # create output of the inputs created above
-    y = [[s.vites, s.valve_x, s.valve_y, s.pedal_volt] for _,s in segment.iterrows()]
-    Y = np.array(y[1:]).T
+    if mode==1:
+        y = [[s.valve_x, s.valve_y, s.pedal_volt] for _,s in segment.iterrows()]
+        Y = np.array(y[1:]).T
+    else:
+        y = [[s.kepce_kapama, s.bom_kald, s.pedal_volt] for _,s in segment.iterrows()]
+        Y = np.array(y[1:]).T
+        
     return X, Y
 
 def get_training_data():
